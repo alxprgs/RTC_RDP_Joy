@@ -4,14 +4,13 @@ import { Text, useTheme } from "react-native-paper";
 
 type Props = {
   size?: number;
-  deadzone?: number; // 0..100
-  scale?: number; // 0..1
+  deadzone?: number;
+  scale?: number;
   showValues?: boolean;
   label?: string;
 
-  // NEW: цвета “пальца”
-  knobColor?: string;        // заливка
-  knobBorderColor?: string;  // обводка
+  knobColor?: string;
+  knobBorderColor?: string;
 
   onChange: (x: number, y: number, active: boolean) => void;
 };
@@ -25,7 +24,6 @@ function round(n: number) {
 }
 
 function hexToRgba(hex: string, alpha: number) {
-  // поддержка #RGB / #RRGGBB
   const h = (hex || "").trim();
   if (!h.startsWith("#")) return `rgba(255,255,255,${alpha})`;
 
@@ -64,7 +62,7 @@ export default function JoystickPad({
 
   const derived = useMemo(() => {
     const nx = clamp(pos.x / radius, -1, 1);
-    const ny = clamp(-pos.y / radius, -1, 1); // вверх = +
+    const ny = clamp(-pos.y / radius, -1, 1);
     const mag = clamp(Math.sqrt(nx * nx + ny * ny), 0, 1);
 
     const rawX = round(nx * 255);
@@ -135,8 +133,7 @@ export default function JoystickPad({
   const lineLen = clamp(derived.mag * radius, 0, radius);
   const showDir = active && !derived.inDeadzone && derived.mag > 0.02;
 
-  // NEW: подсветка может быть у нескольких стрелок сразу (диагональ = 2 стрелки)
-  const thr = 0.25; // порог, чтобы слегка не мигало
+  const thr = 0.25;
   const upOn = showDir && derived.ny > thr;
   const downOn = showDir && derived.ny < -thr;
   const rightOn = showDir && derived.nx > thr;
@@ -147,7 +144,6 @@ export default function JoystickPad({
 
   const arrowHead = 10;
 
-  // NEW: цвет “пальца” по умолчанию — из темы (primary), если не передали вручную
   const primary = (theme as any)?.colors?.primary ?? "#4da3ff";
   const kFill = knobColor ?? hexToRgba(primary, active ? 0.30 : 0.22);
   const kBorder = knobBorderColor ?? hexToRgba(primary, active ? 0.85 : 0.65);
@@ -172,7 +168,6 @@ export default function JoystickPad({
           {label}
         </Text>
 
-        {/* Стрелки (могут подсвечиваться одновременно) */}
         <View style={{ position: "absolute", top: 18, alignItems: "center" }}>
           <Text style={{ opacity: upOn ? onOp : offOp }}>▲</Text>
         </View>
@@ -186,7 +181,6 @@ export default function JoystickPad({
           <Text style={{ opacity: rightOn ? onOp : offOp }}>▶</Text>
         </View>
 
-        {/* Внутренний круг */}
         <View
           style={{
             width: inner,
@@ -197,7 +191,6 @@ export default function JoystickPad({
           }}
         />
 
-        {/* Оси */}
         <View
           style={{
             position: "absolute",
@@ -215,7 +208,6 @@ export default function JoystickPad({
           }}
         />
 
-        {/* Deadzone */}
         <View
           style={{
             position: "absolute",
@@ -232,26 +224,34 @@ export default function JoystickPad({
           }}
         />
 
-        {/* Стрелка направления (диагонали тоже ок) */}
         {showDir ? (
-          <>
+          <View
+            style={{
+              position: "absolute",
+              left: size / 2 - lineLen / 2,
+              top: size / 2 - arrowHead / 2, 
+              width: lineLen,
+              height: arrowHead,
+              transform: [{ rotate: `${derived.angleDeg}deg` }],
+            }}
+          >
             <View
               style={{
                 position: "absolute",
-                left: size / 2,
-                top: size / 2 - lineThickness / 2,
-                width: Math.max(0, lineLen - arrowHead),
+                left: lineLen / 2,
+                top: (arrowHead - lineThickness) / 2,
+                width: Math.max(0, lineLen / 2 - arrowHead),
                 height: lineThickness,
                 borderRadius: 999,
                 backgroundColor: "rgba(255,255,255,0.22)",
-                transform: [{ rotate: `${derived.angleDeg}deg` }],
               }}
             />
+
             <View
               style={{
                 position: "absolute",
-                left: size / 2 + (lineLen - arrowHead),
-                top: size / 2 - arrowHead / 2,
+                left: Math.max(0, lineLen - arrowHead),
+                top: 0,
                 width: 0,
                 height: 0,
                 borderTopWidth: arrowHead / 2,
@@ -260,13 +260,11 @@ export default function JoystickPad({
                 borderTopColor: "transparent",
                 borderBottomColor: "transparent",
                 borderLeftColor: "rgba(255,255,255,0.28)",
-                transform: [{ rotate: `${derived.angleDeg}deg` }],
               }}
             />
-          </>
+          </View>
         ) : null}
 
-        {/* “Палец” */}
         <View
           style={{
             position: "absolute",
