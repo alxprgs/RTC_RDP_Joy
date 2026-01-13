@@ -74,7 +74,7 @@ export default function JoystickPad({
     const outX = inDeadzone ? 0 : round(rawX * clamp(scale, 0, 1));
     const outY = inDeadzone ? 0 : round(rawY * clamp(scale, 0, 1));
 
-    const angleDeg = (Math.atan2(ny, nx) * 180) / Math.PI;
+    const angleDeg = (-Math.atan2(ny, nx) * 180) / Math.PI;
 
     return { nx, ny, mag, rawX, rawY, outX, outY, dzFrac, inDeadzone, angleDeg };
   }, [pos.x, pos.y, radius, deadzone, scale]);
@@ -130,7 +130,10 @@ export default function JoystickPad({
   const dzR = radius * derived.dzFrac;
 
   const lineThickness = 3;
-  const lineLen = clamp(derived.mag * radius, 0, radius);
+  const minLen = radius * 0.45;
+  const maxLen = radius * 0.95;
+  const t = clamp((derived.mag - 0.02) / (1 - 0.02), 0, 1);
+  const lineLen = minLen + (maxLen - minLen) * t;
   const showDir = active && !derived.inDeadzone && derived.mag > 0.02;
 
   const thr = 0.25;

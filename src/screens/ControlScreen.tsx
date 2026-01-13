@@ -1,4 +1,3 @@
-// src/screens/ControlScreen.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, View } from "react-native";
 import {
@@ -15,11 +14,12 @@ import {
   Text,
   TextInput,
 } from "react-native-paper";
-
+import { useThemeMode } from "../app/themeContext";
 import JoystickPad from "../components/JoystickPad";
 import { apiJoystick, apiListActions, apiRunAction, apiStop, apiHealth } from "../lib/api";
 import { loadButtons, saveButtons } from "../lib/storage";
 import type { CustomButton, ServerAction } from "../types/buttons";
+import { useTheme } from "react-native-paper";
 
 import { JoystickWsClient, type WsStatus } from "../lib/joystickWs";
 import { loadTransportMode, saveTransportMode, type TransportMode } from "../lib/prefs";
@@ -48,14 +48,15 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   const [snack, setSnack] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
   const [healthText, setHealthText] = useState<string>("");
 
-  // ---- Transport mode (HTTP/WS) ----
+  const { mode, toggle } = useThemeMode();
   const [transportMode, setTransportMode] = useState<TransportMode>("http");
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const [wsErrText, setWsErrText] = useState<string>("");
 
+  const theme = useTheme();
+
   const wsRef = useRef<JoystickWsClient | null>(null);
 
-  // load mode per baseUrl
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -269,9 +270,13 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
           : "WS: disconnected";
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <Appbar.Header>
         <Appbar.Content title="Motor Control" subtitle={baseUrl} />
+          <Appbar.Action
+          icon={mode === "dark" ? "weather-sunny" : "weather-night"}
+          onPress={toggle}
+        />
         <Appbar.Action icon="heart-pulse" onPress={refreshHealth} />
         <Appbar.Action icon="swap-horizontal" onPress={onChangeHost} />
       </Appbar.Header>
