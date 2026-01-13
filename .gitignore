@@ -1,32 +1,41 @@
-# Prerequisites
-*.d
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+# dependencies
+node_modules/
 
-# Precompiled Headers
-*.gch
-*.pch
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
 
-# Fortran module files
-*.mod
-*.smod
+# Metro
+.metro-health-check*
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
 
-# Executables
-*.exe
-*.out
-*.app
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
