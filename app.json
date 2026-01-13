@@ -4,11 +4,11 @@
     "slug": "rtc_rdp_joy",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon.jpg",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/icon.jpg",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -17,21 +17,30 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/icon.jpg",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "usesCleartextTraffic": true,
       "package": "com.alx_horse.rtc_rdp_joy"
     },
     "web": {
-      "favicon": "./assets/icon.png"
+      "favicon": "./assets/icon.jpg"
     },
     "extra": {
       "eas": {
         "projectId": "5f616e6f-b6e0-42e7-831d-95e991508c3e"
       }
-    }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
   }
 }
