@@ -22,10 +22,16 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "usesCleartextTraffic": true
+      "usesCleartextTraffic": true,
+      "package": "com.alx_horse.rtc_rdp_joy"
     },
     "web": {
       "favicon": "./assets/icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "5f616e6f-b6e0-42e7-831d-95e991508c3e"
+      }
     }
   }
 }
