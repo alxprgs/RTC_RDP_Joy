@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Джойстик для РТК (ШСК)",
-    "slug": "RTC_RDP_Joy",
+    "slug": "rtc_rdp_joy",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
