@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { KeyboardAvoidingView, Platform, View } from "react-native";
-import { Button, Card, HelperText, Text, TextInput } from "react-native-paper";
+import { Button, Card, HelperText, Text, TextInput, useTheme } from "react-native-paper";
 import { apiHealth, normalizeBaseUrl } from "../lib/api";
 
 type Props = {
@@ -9,6 +9,8 @@ type Props = {
 };
 
 export default function HostScreen({ initialValue, onConnected }: Props) {
+  const theme = useTheme();
+
   const [input, setInput] = useState(initialValue || "");
   const [checking, setChecking] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
@@ -53,15 +55,24 @@ export default function HostScreen({ initialValue, onConnected }: Props) {
   return (
     <KeyboardAvoidingView
       behavior={Platform.select({ ios: "padding", android: undefined })}
-      style={{ flex: 1, padding: 16, justifyContent: "center" }}
+      style={{
+        flex: 1,
+        padding: 16,
+        justifyContent: "center",
+        backgroundColor: theme.colors.background, // ✅ вот оно
+      }}
     >
-      <Card style={{ borderRadius: 18, overflow: "hidden" }}>
+      <Card
+        style={{
+          borderRadius: 18,
+          overflow: "hidden",
+          backgroundColor: theme.colors.surface, // чтобы карточка красиво менялась
+        }}
+      >
         <Card.Content style={{ gap: 12 }}>
           <Text variant="headlineSmall">Arduino Motor Bridge</Text>
           <Text style={{ opacity: 0.7 }}>
-            Введи адрес сервера. Примеры:{"\n"}
-            • 192.168.0.10:8000{"\n"}
-            • http://192.168.0.10:8000
+            Введи адрес сервера. Примеры:{"\n"}• 192.168.0.10:8000{"\n"}• http://192.168.0.10:8000
           </Text>
 
           <TextInput
@@ -93,12 +104,7 @@ export default function HostScreen({ initialValue, onConnected }: Props) {
             >
               Проверить
             </Button>
-            <Button
-              mode="contained"
-              onPress={() => onConnected(baseUrl)}
-              disabled={!canStart}
-              style={{ flex: 1 }}
-            >
+            <Button mode="contained" onPress={() => onConnected(baseUrl)} disabled={!canStart} style={{ flex: 1 }}>
               Старт
             </Button>
           </View>

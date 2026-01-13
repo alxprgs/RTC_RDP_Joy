@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FlatList, View } from "react-native";
+import { Animated, Easing, FlatList, View } from "react-native";
 import {
   Appbar,
   Button,
@@ -13,13 +13,14 @@ import {
   Snackbar,
   Text,
   TextInput,
+  useTheme,
 } from "react-native-paper";
+
 import { useThemeMode } from "../app/themeContext";
 import JoystickPad from "../components/JoystickPad";
 import { apiJoystick, apiListActions, apiRunAction, apiStop, apiHealth } from "../lib/api";
 import { loadButtons, saveButtons } from "../lib/storage";
 import type { CustomButton, ServerAction } from "../types/buttons";
-import { useTheme } from "react-native-paper";
 
 import { JoystickWsClient, type WsStatus } from "../lib/joystickWs";
 import { loadTransportMode, saveTransportMode, type TransportMode } from "../lib/prefs";
@@ -38,6 +39,9 @@ type Props = {
 };
 
 export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
+  const theme = useTheme();
+  const { mode, toggle } = useThemeMode();
+
   const [serverActions, setServerActions] = useState<ServerAction[]>([]);
   const [buttons, setButtons] = useState<CustomButton[]>([]);
   const [loadingActions, setLoadingActions] = useState(false);
@@ -48,15 +52,103 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   const [snack, setSnack] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
   const [healthText, setHealthText] = useState<string>("");
 
-  const { mode, toggle } = useThemeMode();
+  // ---- Transport mode (HTTP/WS) ----
   const [transportMode, setTransportMode] = useState<TransportMode>("http");
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const [wsErrText, setWsErrText] = useState<string>("");
 
-  const theme = useTheme();
-
   const wsRef = useRef<JoystickWsClient | null>(null);
 
+  // ===== Heart animation state =====
+  const [healthChecking, setHealthChecking] = useState(false);
+  const heartScale = useRef(new Animated.Value(1)).current;
+  const heartRot = useRef(new Animated.Value(0)).current; // degrees
+  const heartShake = useRef(new Animated.Value(0)).current; // px
+
+  const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+
+  function startHeartLoop() {
+    // лёгкий “дыхательный” пульс
+    pulseLoopRef.current?.stop();
+
+    heartScale.setValue(1);
+    heartRot.setValue(0);
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(heartScale, {
+            toValue: 1.18,
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(heartRot, {
+            toValue: 6,
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.timing(heartScale, {
+            toValue: 1.0,
+            duration: 260,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(heartRot, {
+            toValue: -6,
+            duration: 260,
+            easing: Easing.inOut(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.timing(heartRot, {
+          toValue: 0,
+          duration: 160,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    pulseLoopRef.current = loop;
+    loop.start();
+  }
+
+  function stopHeartLoop() {
+    pulseLoopRef.current?.stop();
+    pulseLoopRef.current = null;
+
+    Animated.parallel([
+      Animated.spring(heartScale, { toValue: 1, useNativeDriver: true }),
+      Animated.spring(heartRot, { toValue: 0, useNativeDriver: true }),
+    ]).start();
+  }
+
+  function playOkTick() {
+    // два быстрых “удара”
+    Animated.sequence([
+      Animated.timing(heartScale, { toValue: 1.22, duration: 120, useNativeDriver: true }),
+      Animated.timing(heartScale, { toValue: 1.0, duration: 120, useNativeDriver: true }),
+      Animated.timing(heartScale, { toValue: 1.18, duration: 110, useNativeDriver: true }),
+      Animated.timing(heartScale, { toValue: 1.0, duration: 140, useNativeDriver: true }),
+    ]).start();
+  }
+
+  function playErrorShake() {
+    heartShake.setValue(0);
+    Animated.sequence([
+      Animated.timing(heartShake, { toValue: 5, duration: 60, useNativeDriver: true }),
+      Animated.timing(heartShake, { toValue: -5, duration: 60, useNativeDriver: true }),
+      Animated.timing(heartShake, { toValue: 4, duration: 55, useNativeDriver: true }),
+      Animated.timing(heartShake, { toValue: -4, duration: 55, useNativeDriver: true }),
+      Animated.timing(heartShake, { toValue: 0, duration: 80, useNativeDriver: true }),
+    ]).start();
+  }
+
+  // load mode per baseUrl
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -116,16 +208,37 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   }, [baseUrl]);
 
   async function refreshHealth() {
+    if (!baseUrl) return;
+
+    // если уже проверяем — игнор
+    if (healthChecking) return;
+
+    setHealthChecking(true);
+    startHeartLoop();
+
     try {
       const r = await apiHealth(baseUrl);
       setHealthText(r?.ok ? `OK: ${String(r.arduino ?? "")}` : `Нет: ${String(r?.error ?? "")}`);
+
+      stopHeartLoop();
+
+      if (r?.ok) {
+        playOkTick();
+      } else {
+        playErrorShake();
+      }
     } catch (e: any) {
       setHealthText(e?.message ? String(e.message) : "health error");
+      stopHeartLoop();
+      playErrorShake();
+    } finally {
+      setHealthChecking(false);
     }
   }
 
   useEffect(() => {
     refreshHealth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
   async function persist(next: CustomButton[]) {
@@ -269,15 +382,33 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
           ? "WS: reconnecting…"
           : "WS: disconnected";
 
+  // animated styles for the heart icon wrapper
+  const heartRotate = heartRot.interpolate({
+    inputRange: [-10, 10],
+    outputRange: ["-10deg", "10deg"],
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <Appbar.Header>
         <Appbar.Content title="Motor Control" subtitle={baseUrl} />
+
+        <Appbar.Action icon={mode === "dark" ? "weather-sunny" : "weather-night"} onPress={toggle} />
+
+        {/* Heart with animation wrapper */}
+        <Animated.View
+          style={{
+            transform: [{ translateX: heartShake }, { scale: heartScale }, { rotate: heartRotate }],
+          }}
+        >
           <Appbar.Action
-          icon={mode === "dark" ? "weather-sunny" : "weather-night"}
-          onPress={toggle}
-        />
-        <Appbar.Action icon="heart-pulse" onPress={refreshHealth} />
+            icon="heart-pulse"
+            onPress={refreshHealth}
+            disabled={healthChecking}
+            accessibilityLabel="Проверить связь"
+          />
+        </Animated.View>
+
         <Appbar.Action icon="swap-horizontal" onPress={onChangeHost} />
       </Appbar.Header>
 
@@ -302,21 +433,14 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                     {transportMode === "ws" ? (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                         <Text style={{ opacity: 0.7 }}>{wsStatusLabel}</Text>
-                        <IconButton
-                          icon="wifi-refresh"
-                          size={18}
-                          onPress={() => wsRef.current?.reconnectNow()}
-                        />
+                        <IconButton icon="wifi-refresh" size={18} onPress={() => wsRef.current?.reconnectNow()} />
                       </View>
                     ) : (
                       <Text style={{ opacity: 0.7 }}>HTTP: polling</Text>
                     )}
                   </View>
 
-                  <RadioButton.Group
-                    value={transportMode}
-                    onValueChange={(v) => setTransportMode(v as TransportMode)}
-                  >
+                  <RadioButton.Group value={transportMode} onValueChange={(v) => setTransportMode(v as TransportMode)}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
                       <View style={{ flexDirection: "row", alignItems: "center" }}>
                         <RadioButton value="http" />

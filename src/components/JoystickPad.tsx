@@ -27,7 +27,9 @@ function hexToRgba(hex: string, alpha: number) {
   const h = (hex || "").trim();
   if (!h.startsWith("#")) return `rgba(255,255,255,${alpha})`;
 
-  let r = 255, g = 255, b = 255;
+  let r = 255,
+    g = 255,
+    b = 255;
   if (h.length === 4) {
     r = parseInt(h[1] + h[1], 16);
     g = parseInt(h[2] + h[2], 16);
@@ -38,6 +40,21 @@ function hexToRgba(hex: string, alpha: number) {
     b = parseInt(h.slice(5, 7), 16);
   }
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** Делает rgba из цвета темы (#hex или rgb/rgba). Если цвет странный — фолбэк в белый/чёрный. */
+function rgbaFromTheme(color: string | undefined, alpha: number, fallbackDark = true) {
+  const c = (color || "").trim();
+
+  // hex
+  if (c.startsWith("#")) return hexToRgba(c, alpha);
+
+  // rgb/rgba
+  const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (m) return `rgba(${m[1]},${m[2]},${m[3]},${alpha})`;
+
+  // fallback
+  return fallbackDark ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
 }
 
 export default function JoystickPad({
@@ -51,6 +68,7 @@ export default function JoystickPad({
   onChange,
 }: Props) {
   const theme = useTheme();
+  const isDark = !!(theme as any)?.dark;
 
   const knob = 76;
   const radius = (size - knob) / 2;
@@ -74,11 +92,35 @@ export default function JoystickPad({
     const outX = inDeadzone ? 0 : round(rawX * clamp(scale, 0, 1));
     const outY = inDeadzone ? 0 : round(rawY * clamp(scale, 0, 1));
 
+    // минус — чтобы крутилось “как ожидается” в RN
     const angleDeg = (-Math.atan2(ny, nx) * 180) / Math.PI;
 
     return { nx, ny, mag, rawX, rawY, outX, outY, dzFrac, inDeadzone, angleDeg };
   }, [pos.x, pos.y, radius, deadzone, scale]);
 
+  // ---- Цвета под светлую/тёмную тему ----
+  const onSurface = (theme as any)?.colors?.onSurface as string | undefined;
+  const surface = ((theme as any)?.colors?.surface as string | undefined) ?? "#ffffff";
+  const surfaceVariant = (theme as any)?.colors?.surfaceVariant as string | undefined;
+
+  const bg = rgbaFromTheme(surfaceVariant ?? surface, isDark ? 0.18 : 0.75, isDark);
+  const ring = rgbaFromTheme(onSurface, isDark ? 0.14 : 0.22, isDark);
+  const axis = rgbaFromTheme(onSurface, isDark ? 0.12 : 0.20, isDark);
+  const textCol = onSurface ?? (isDark ? "#fff" : "#000");
+
+  const arrowLine = rgbaFromTheme(onSurface, isDark ? 0.26 : 0.38, isDark);
+  const arrowHeadCol = rgbaFromTheme(onSurface, isDark ? 0.34 : 0.48, isDark);
+
+  const dzBorder = rgbaFromTheme(
+    onSurface,
+    derived.inDeadzone ? (isDark ? 0.22 : 0.28) : (isDark ? 0.14 : 0.22),
+    isDark
+  );
+  const dzFill = derived.inDeadzone ? rgbaFromTheme(onSurface, isDark ? 0.06 : 0.08, isDark) : "transparent";
+
+  const centerDot = rgbaFromTheme(onSurface, isDark ? 0.20 : 0.28, isDark);
+
+  // ---- Пан ----
   const pan = useMemo(
     () =>
       PanResponder.create({
@@ -125,6 +167,7 @@ export default function JoystickPad({
     [onChange, radius]
   );
 
+  // ---- Геометрия ----
   const inner = size - 28;
   const innerR = inner / 2;
   const dzR = radius * derived.dzFrac;
@@ -134,8 +177,11 @@ export default function JoystickPad({
   const maxLen = radius * 0.95;
   const t = clamp((derived.mag - 0.02) / (1 - 0.02), 0, 1);
   const lineLen = minLen + (maxLen - minLen) * t;
+
+  const arrowHead = 10;
   const showDir = active && !derived.inDeadzone && derived.mag > 0.02;
 
+  // ---- Подсветка стрелок (может быть несколько сразу) ----
   const thr = 0.25;
   const upOn = showDir && derived.ny > thr;
   const downOn = showDir && derived.ny < -thr;
@@ -145,11 +191,12 @@ export default function JoystickPad({
   const onOp = 1.0;
   const offOp = 0.35;
 
-  const arrowHead = 10;
-
+  // ---- Knob ----
   const primary = (theme as any)?.colors?.primary ?? "#4da3ff";
-  const kFill = knobColor ?? hexToRgba(primary, active ? 0.30 : 0.22);
-  const kBorder = knobBorderColor ?? hexToRgba(primary, active ? 0.85 : 0.65);
+  const kFill =
+    knobColor ??
+    hexToRgba(primary, active ? (isDark ? 0.30 : 0.22) : (isDark ? 0.22 : 0.16));
+  const kBorder = knobBorderColor ?? hexToRgba(primary, active ? 0.9 : isDark ? 0.7 : 0.8);
 
   return (
     <View style={{ alignItems: "center", gap: 8 }}>
@@ -161,45 +208,46 @@ export default function JoystickPad({
           borderRadius: size / 2,
           alignItems: "center",
           justifyContent: "center",
-          backgroundColor: "rgba(255,255,255,0.06)",
+          backgroundColor: bg,
           borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.10)",
+          borderColor: ring,
           overflow: "hidden",
         }}
       >
-        <Text style={{ position: "absolute", top: 10, opacity: 0.75 }}>
-          {label}
-        </Text>
+        <Text style={{ position: "absolute", top: 10, opacity: 0.75, color: textCol }}>{label}</Text>
 
+        {/* стрелки */}
         <View style={{ position: "absolute", top: 18, alignItems: "center" }}>
-          <Text style={{ opacity: upOn ? onOp : offOp }}>▲</Text>
+          <Text style={{ opacity: upOn ? onOp : offOp, color: textCol }}>▲</Text>
         </View>
         <View style={{ position: "absolute", bottom: 14, alignItems: "center" }}>
-          <Text style={{ opacity: downOn ? onOp : offOp }}>▼</Text>
+          <Text style={{ opacity: downOn ? onOp : offOp, color: textCol }}>▼</Text>
         </View>
         <View style={{ position: "absolute", left: 14, justifyContent: "center" }}>
-          <Text style={{ opacity: leftOn ? onOp : offOp }}>◀</Text>
+          <Text style={{ opacity: leftOn ? onOp : offOp, color: textCol }}>◀</Text>
         </View>
         <View style={{ position: "absolute", right: 14, justifyContent: "center" }}>
-          <Text style={{ opacity: rightOn ? onOp : offOp }}>▶</Text>
+          <Text style={{ opacity: rightOn ? onOp : offOp, color: textCol }}>▶</Text>
         </View>
 
+        {/* внутренний круг */}
         <View
           style={{
             width: inner,
             height: inner,
             borderRadius: innerR,
             borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.08)",
+            borderColor: ring,
           }}
         />
 
+        {/* оси */}
         <View
           style={{
             position: "absolute",
             width: inner,
             height: 1,
-            backgroundColor: "rgba(255,255,255,0.10)",
+            backgroundColor: axis,
           }}
         />
         <View
@@ -207,10 +255,11 @@ export default function JoystickPad({
             position: "absolute",
             height: inner,
             width: 1,
-            backgroundColor: "rgba(255,255,255,0.10)",
+            backgroundColor: axis,
           }}
         />
 
+        {/* deadzone */}
         <View
           style={{
             position: "absolute",
@@ -218,21 +267,18 @@ export default function JoystickPad({
             height: dzR * 2,
             borderRadius: dzR,
             borderWidth: 1,
-            borderColor: derived.inDeadzone
-              ? "rgba(255,255,255,0.22)"
-              : "rgba(255,255,255,0.12)",
-            backgroundColor: derived.inDeadzone
-              ? "rgba(255,255,255,0.06)"
-              : "transparent",
+            borderColor: dzBorder,
+            backgroundColor: dzFill,
           }}
         />
 
+        {/* стрелка направления */}
         {showDir ? (
           <View
             style={{
               position: "absolute",
               left: size / 2 - lineLen / 2,
-              top: size / 2 - arrowHead / 2, 
+              top: size / 2 - arrowHead / 2,
               width: lineLen,
               height: arrowHead,
               transform: [{ rotate: `${derived.angleDeg}deg` }],
@@ -246,10 +292,9 @@ export default function JoystickPad({
                 width: Math.max(0, lineLen / 2 - arrowHead),
                 height: lineThickness,
                 borderRadius: 999,
-                backgroundColor: "rgba(255,255,255,0.22)",
+                backgroundColor: arrowLine,
               }}
             />
-
             <View
               style={{
                 position: "absolute",
@@ -262,12 +307,13 @@ export default function JoystickPad({
                 borderLeftWidth: arrowHead,
                 borderTopColor: "transparent",
                 borderBottomColor: "transparent",
-                borderLeftColor: "rgba(255,255,255,0.28)",
+                borderLeftColor: arrowHeadCol,
               }}
             />
           </View>
         ) : null}
 
+        {/* “палец” */}
         <View
           style={{
             position: "absolute",
@@ -281,33 +327,31 @@ export default function JoystickPad({
             borderColor: kBorder,
 
             elevation: active ? 6 : 2,
-            shadowOpacity: active ? 0.35 : 0.20,
+            shadowOpacity: active ? 0.35 : 0.2,
             shadowRadius: active ? 10 : 6,
             shadowOffset: { width: 0, height: 3 },
           }}
         />
 
+        {/* центр */}
         <View
           style={{
             position: "absolute",
             width: 8,
             height: 8,
             borderRadius: 4,
-            backgroundColor:
-              derived.inDeadzone && active
-                ? "rgba(255,255,255,0.35)"
-                : "rgba(255,255,255,0.20)",
+            backgroundColor: derived.inDeadzone && active ? rgbaFromTheme(onSurface, isDark ? 0.32 : 0.36, isDark) : centerDot,
           }}
         />
       </View>
 
       {showValues ? (
         <View style={{ alignItems: "center" }}>
-          <Text style={{ opacity: 0.75 }}>
+          <Text style={{ opacity: 0.75, color: textCol }}>
             X {derived.outX} • Y {derived.outY} • {Math.round(derived.mag * 100)}%
             {derived.inDeadzone ? " • deadzone" : ""}
           </Text>
-          <Text style={{ opacity: 0.55, fontSize: 12 }}>
+          <Text style={{ opacity: 0.55, fontSize: 12, color: textCol }}>
             raw: {derived.rawX}/{derived.rawY} • scale: {String(scale)} • dz: {String(deadzone)}
           </Text>
         </View>
