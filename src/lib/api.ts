@@ -173,3 +173,11 @@ export async function apiServoAll(baseUrl: string, deg: number) {
 export async function apiServoCenter(baseUrl: string) {
   return fetchJson(`${baseUrl}/servo/center`, { method: "POST" }, 2500);
 }
+
+export async function apiTelemetry(baseUrl: string) {
+  return fetchJson(
+    `${baseUrl}/telemetry?disk=false&net=true&sensors=true&arduino=true`,
+    { method: "GET" },
+    2500
+  );
+}

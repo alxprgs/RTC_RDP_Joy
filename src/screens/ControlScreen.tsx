@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Animated, Easing, FlatList, View } from "react-native";
+import { Animated, Easing, FlatList, View, ScrollView } from "react-native";
 import Slider from "@react-native-community/slider";
 import {
   Appbar,
@@ -29,6 +29,8 @@ import {
   apiServoB,
   apiServoAll,
   apiServoCenter,
+  apiTelemetry,
+  baseUrlToWsUrl,
 } from "../lib/api";
 import { loadButtons, saveButtons } from "../lib/storage";
 import type { CustomButton, ServerAction } from "../types/buttons";
@@ -79,11 +81,228 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
 
   const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
-    const [servoA, setServoA] = useState(90);
+  const [servoA, setServoA] = useState(90);
   const [servoB, setServoB] = useState(90);
 
   const [servoAText, setServoAText] = useState("90");
   const [servoBText, setServoBText] = useState("90");
+
+  const [telemetry, setTelemetry] = useState<any | null>(null);
+  const [telemetryErr, setTelemetryErr] = useState<string>("");
+  const [telemetryTs, setTelemetryTs] = useState<number>(0);
+
+  const [telemetryTransport, setTelemetryTransport] = useState<"ws" | "http">("ws");
+  const [telemetryWsStatus, setTelemetryWsStatus] = useState<WsStatus>("disconnected");
+
+  const telemetryWsRef = useRef<WebSocket | null>(null);
+  const telemetryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const telemetryReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const telemetryFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const telemetryShouldRunRef = useRef(false);
+  const telemetryHasWsDataRef = useRef(false);
+  const telemetryInFlightRef = useRef(false);
+
+  const [telemetryOpen, setTelemetryOpen] = useState(false);
+
+  const [alertSnack, setAlertSnack] = useState<{ open: boolean; text: string }>({
+    open: false,
+    text: "",
+  });
+
+  const lastAlertRef = useRef({
+    undervoltageNow: false,
+    vccLow: false,
+    hotCpu: false,
+  });
+
+  function fmtBytesAny(x: any) {
+    const b = typeof x === "number" ? x : typeof x?.bytes === "number" ? x.bytes : null;
+    if (b == null) return "—";
+
+    const kb = 1024;
+    const mb = kb * 1024;
+    const gb = mb * 1024;
+
+    if (b >= gb) return `${(b / gb).toFixed(1)} GB`;
+    if (b >= mb) return `${(b / mb).toFixed(0)} MB`;
+    if (b >= kb) return `${(b / kb).toFixed(0)} KB`;
+    return `${b} B`;
+  }
+
+  function checkTelemetryAlerts(t: any) {
+    if (!t) return;
+
+    const uvNow = Boolean(t?.host?.rpi?.throttled_flags?.undervoltage_now);
+    const vccMv = t?.arduino?.data?.vcc_mv;
+    const vccLow = typeof vccMv === "number" && vccMv > 0 && vccMv < 4700;
+
+    const cpuTemp = t?.host?.rpi?.cpu_temp_c;
+    const hotCpu = typeof cpuTemp === "number" && cpuTemp >= 80;
+
+    if (uvNow && !lastAlertRef.current.undervoltageNow) {
+      setAlertSnack({ open: true, text: "⚠️ UNDERVOLTAGE NOW! Питание Raspberry просело." });
+    }
+    if (vccLow && !lastAlertRef.current.vccLow) {
+      setAlertSnack({
+        open: true,
+        text: `⚠️ Arduino VCC низкое: ${(vccMv / 1000).toFixed(2)}V (норма ~5.0V)`,
+      });
+    }
+    if (hotCpu && !lastAlertRef.current.hotCpu) {
+      setAlertSnack({ open: true, text: `⚠️ Перегрев CPU: ${cpuTemp.toFixed(1)}°C` });
+    }
+
+    lastAlertRef.current = {
+      undervoltageNow: uvNow,
+      vccLow,
+      hotCpu,
+    };
+  }
+
+  function stopTelemetryHttpPolling() {
+    if (telemetryPollRef.current) {
+      clearInterval(telemetryPollRef.current);
+      telemetryPollRef.current = null;
+    }
+  }
+
+  function startTelemetryHttpPolling() {
+    if (telemetryPollRef.current) return;
+
+    setTelemetryTransport("http");
+
+    refreshTelemetryHttp();
+
+    telemetryPollRef.current = setInterval(() => {
+      refreshTelemetryHttp();
+    }, 2000);
+  }
+
+  async function refreshTelemetryHttp() {
+    if (!baseUrl) return;
+    if (telemetryInFlightRef.current) return;
+
+    telemetryInFlightRef.current = true;
+    try {
+      const t = await apiTelemetry(baseUrl);
+      setTelemetry(t);
+      checkTelemetryAlerts(t);
+      setTelemetryErr("");
+      setTelemetryTs(Date.now());
+    } catch (e: any) {
+      setTelemetryErr(e?.message ? String(e.message) : "Telemetry error");
+    } finally {
+      telemetryInFlightRef.current = false;
+    }
+  }
+
+  function closeTelemetryWs() {
+    if (telemetryWsRef.current) {
+      try {
+        telemetryWsRef.current.close();
+      } catch {}
+      telemetryWsRef.current = null;
+    }
+  }
+
+  function scheduleTelemetryWsReconnect(delayMs = 4000) {
+    if (!telemetryShouldRunRef.current) return;
+
+    if (telemetryReconnectRef.current) clearTimeout(telemetryReconnectRef.current);
+    telemetryReconnectRef.current = setTimeout(() => {
+      connectTelemetryWs();
+    }, delayMs);
+  }
+
+  function connectTelemetryWs() {
+    closeTelemetryWs();
+
+    if (telemetryFallbackTimerRef.current) clearTimeout(telemetryFallbackTimerRef.current);
+    telemetryHasWsDataRef.current = false;
+
+    if (!baseUrl) {
+      startTelemetryHttpPolling();
+      return;
+    }
+
+    const wsUrl = baseUrlToWsUrl(baseUrl, "/ws/telemetry");
+    if (!wsUrl) {
+      startTelemetryHttpPolling();
+      return;
+    }
+
+    setTelemetryTransport("ws");
+    setTelemetryWsStatus("connecting");
+
+    const ws = new WebSocket(wsUrl);
+    telemetryWsRef.current = ws;
+
+    telemetryFallbackTimerRef.current = setTimeout(() => {
+      if (!telemetryHasWsDataRef.current) {
+        startTelemetryHttpPolling();
+      }
+    }, 1500);
+
+    ws.onopen = () => {
+      setTelemetryWsStatus("connected");
+      setTelemetryTransport("ws");
+      stopTelemetryHttpPolling(); 
+    };
+
+    ws.onmessage = (ev) => {
+      const text = String(ev?.data ?? "").trim();
+      if (!text) return;
+
+      try {
+        const data = JSON.parse(text);
+        telemetryHasWsDataRef.current = true;
+        setTelemetry(data);
+        setTelemetryErr("");
+        setTelemetryTs(Date.now());
+
+        setTelemetryTransport("ws");
+        stopTelemetryHttpPolling();
+      } catch {
+      }
+    };
+
+    ws.onerror = () => {
+      setTelemetryWsStatus("disconnected");
+      startTelemetryHttpPolling();
+      scheduleTelemetryWsReconnect(4000);
+    };
+
+    ws.onclose = () => {
+      setTelemetryWsStatus("disconnected");
+      startTelemetryHttpPolling();
+      scheduleTelemetryWsReconnect(4000);
+    };
+  }
+
+  function refreshTelemetryNow() {
+    if (telemetryTransport === "ws") {
+      connectTelemetryWs();
+      return;
+    }
+    refreshTelemetryHttp();
+  }
+
+  useEffect(() => {
+    telemetryShouldRunRef.current = true;
+    connectTelemetryWs();
+
+    return () => {
+      telemetryShouldRunRef.current = false;
+
+      stopTelemetryHttpPolling();
+
+      if (telemetryReconnectRef.current) clearTimeout(telemetryReconnectRef.current);
+      if (telemetryFallbackTimerRef.current) clearTimeout(telemetryFallbackTimerRef.current);
+
+      closeTelemetryWs();
+    };
+  }, [baseUrl]);
 
   const servoInFlightRef = useRef(false);
 
@@ -470,7 +689,7 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
       </Appbar.Header>
 
       <FlatList
-        contentContainerStyle={{ padding: 12, gap: 12 }}
+        contentContainerStyle={{ padding: 12, gap: 12, paddingBottom: 120 }}
         data={[{ key: "main" }]}
         renderItem={() => (
           <>
@@ -786,6 +1005,155 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                 </View>
               </Card.Content>
             </Card>
+            <Card style={{ borderRadius: 18 }} onPress={() => setTelemetryOpen(true)}>
+              <Card.Content style={{ gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text variant="titleMedium">Телеметрия</Text>
+
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Text style={{ opacity: 0.6, fontSize: 12 }}>
+                      {telemetryTransport.toUpperCase()}
+                      {telemetryTransport === "ws" ? (telemetryWsStatus === "connected" ? "" : ` (${telemetryWsStatus})`) : ""}
+                    </Text>
+
+                    <Text style={{ opacity: 0.6, fontSize: 12 }}>
+                      {telemetryTs ? `${Math.max(0, Math.round((Date.now() - telemetryTs) / 1000))}с назад` : "—"}
+                    </Text>
+
+                    <IconButton icon="refresh" size={18} onPress={refreshTelemetryNow} />
+                  </View>
+                </View>
+
+                <Divider />
+
+                {telemetryErr ? (
+                  <Text style={{ color: theme.colors.error, fontSize: 12 }}>
+                    Нет телеметрии: {telemetryErr}
+                  </Text>
+                ) : (
+                  <>
+                    {(() => {
+                      const host = telemetry?.host;
+                      const ardOk = telemetry?.arduino?.ok;
+                      const ard = telemetry?.arduino?.data;
+
+                      const hostCpu = host?.cpu?.percent_total;
+                      const hostRam = host?.memory?.ram?.percent;
+
+                      const isRpi = Boolean(host?.platform?.is_raspberry_pi);
+                      const cpuTemp = host?.rpi?.cpu_temp_c ?? null;
+
+                      const uvNow = host?.rpi?.throttled_flags?.undervoltage_now;
+                      const uvWas = host?.rpi?.throttled_flags?.undervoltage_occurred;
+
+                      const hostname = host?.platform?.hostname ?? "host";
+                      const osName = host?.platform?.system ?? "";
+                      const osRel = host?.platform?.release ?? "";
+
+                      const upSec = host?.uptime?.seconds;
+                      const upStr =
+                        typeof upSec === "number"
+                          ? (() => {
+                              const s = Math.max(0, upSec);
+                              const h = Math.floor(s / 3600);
+                              const m = Math.floor((s % 3600) / 60);
+                              if (h > 0) return `${h}h${m}m`;
+                              return `${m}m`;
+                            })()
+                          : null;
+
+                      let ip: string | null = null;
+                      const ipsObj = host?.network?.ips;
+                      if (ipsObj && typeof ipsObj === "object") {
+                        const entries = Object.entries(ipsObj) as [string, any][];
+                        outer: for (const [, list] of entries) {
+                          if (!Array.isArray(list)) continue;
+                          for (const addr of list) {
+                            if (typeof addr === "string" && addr.includes(".") && !addr.startsWith("127.")) {
+                              ip = addr;
+                              break outer;
+                            }
+                          }
+                        }
+                      }
+
+                      const vccMv = typeof ard?.vcc_mv === "number" ? ard.vcc_mv : null;
+                      const vccV = vccMv != null ? (vccMv / 1000).toFixed(2) : null;
+
+                      const aRam = typeof ard?.free_ram === "number" ? ard.free_ram : null;
+                      const aUp = typeof ard?.uptime_ms === "number" ? Math.round(ard.uptime_ms / 1000) : null;
+
+                      const servoPwr = telemetry?.servo_pwr ?? ard?.servo_pwr ?? "—";
+                      const mA = typeof ard?.motorA_cmd === "number" ? ard.motorA_cmd : null;
+                      const mB = typeof ard?.motorB_cmd === "number" ? ard.motorB_cmd : null;
+
+                      const warnParts: string[] = [];
+                      if (isRpi && uvNow) warnParts.push("⚠️ UNDERVOLTAGE NOW");
+                      else if (isRpi && uvWas) warnParts.push("⚠️ undervoltage было ранее");
+                      if (typeof cpuTemp === "number" && cpuTemp >= 80) warnParts.push("⚠️ HOT CPU");
+
+                      const hostLine1: string[] = [];
+                      if (typeof hostCpu === "number") hostLine1.push(`CPU ${Math.round(hostCpu)}%`);
+                      if (typeof hostRam === "number") hostLine1.push(`RAM ${Math.round(hostRam)}%`);
+                      if (isRpi && typeof cpuTemp === "number") hostLine1.push(`T ${cpuTemp.toFixed(1)}°C`);
+
+                      const hostLine2: string[] = [];
+                      hostLine2.push(`${hostname}`);
+                      if (osName) hostLine2.push(`${osName}${osRel ? ` ${osRel}` : ""}`);
+                      if (ip) hostLine2.push(ip);
+                      if (upStr) hostLine2.push(`UP ${upStr}`);
+
+                      const ardLine1: string[] = [];
+                      if (vccV != null) ardLine1.push(`VCC ${vccV}V`);
+                      if (typeof aRam === "number") ardLine1.push(`RAM ${aRam}B`);
+
+                      const ardLine2: string[] = [];
+                      if (typeof aUp === "number") ardLine2.push(`UP ${aUp}s`);
+                      if (servoPwr) ardLine2.push(`Servo ${String(servoPwr)}`);
+                      if (mA != null && mB != null) ardLine2.push(`M ${mA}/${mB}`);
+
+                      return (
+                        <>
+                          {warnParts.length ? (
+                            <Text style={{ color: theme.colors.error, fontSize: 12 }}>
+                              {warnParts.join(" • ")}
+                            </Text>
+                          ) : null}
+
+                          <View style={{ flexDirection: "row", gap: 12 }}>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ opacity: 0.6, fontSize: 12 }}>HOST</Text>
+                              <Text numberOfLines={3} style={{ opacity: 0.9, fontSize: 13 }}>
+                                {hostLine1.length ? hostLine1.join(" • ") : "—"}
+                              </Text>
+                              <Text numberOfLines={3} style={{ opacity: 0.65, fontSize: 12 }}>
+                                {hostLine2.length ? hostLine2.join(" • ") : "—"}
+                              </Text>
+                            </View>
+
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ opacity: 0.6, fontSize: 12 }}>ARDUINO</Text>
+                              {ardOk ? (
+                                <>
+                                  <Text numberOfLines={3} style={{ opacity: 0.9, fontSize: 13 }}>
+                                    {ardLine1.length ? ardLine1.join(" • ") : "—"}
+                                  </Text>
+                                  <Text numberOfLines={3} style={{ opacity: 0.65, fontSize: 12 }}>
+                                    {ardLine2.length ? ardLine2.join(" • ") : "—"}
+                                  </Text>
+                                </>
+                              ) : (
+                                <Text style={{ opacity: 0.75, fontSize: 12 }}>нет связи</Text>
+                              )}
+                            </View>
+                          </View>
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
+              </Card.Content>
+            </Card>
           </>
         )}
         keyExtractor={(x) => x.key}
@@ -863,9 +1231,285 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
             </Button>
           </Dialog.Actions>
         </Dialog>
+                <Dialog visible={telemetryOpen} onDismiss={() => setTelemetryOpen(false)}>
+          <Dialog.Title>Полная телеметрия</Dialog.Title>
+
+          <Dialog.Content>
+            <ScrollView style={{ maxHeight: 420 }}>
+              {(() => {
+                const t = telemetry;
+                const host = t?.host;
+                const ardOk = t?.arduino?.ok;
+                const ard = t?.arduino?.data;
+
+                const cpu = host?.cpu;
+                const mem = host?.memory;
+                const rpi = host?.rpi;
+                const plat = host?.platform;
+
+                return (
+                  <View style={{ gap: 10 }}>
+                    <Text variant="titleSmall">HOST</Text>
+                    <Text style={{ opacity: 0.8, fontSize: 12 }}>
+                      {plat?.hostname ?? "—"} • {plat?.system ?? "—"} {plat?.release ?? ""}
+                    </Text>
+
+                    <Text style={{ opacity: 0.75, fontSize: 12 }}>
+                      Uptime: {typeof host?.uptime?.seconds === "number" ? `${Math.round(host.uptime.seconds / 60)}m` : "—"}
+                      {"  "}• CPU: {typeof cpu?.percent_total === "number" ? `${Math.round(cpu.percent_total)}%` : "—"}
+                      {"  "}• RAM: {mem?.ram?.percent != null ? `${Math.round(mem.ram.percent)}% (${fmtBytesAny(mem?.ram?.used)} / ${fmtBytesAny(mem?.ram?.total)})` : "—"}
+                    </Text>
+
+                    {plat?.is_raspberry_pi ? (
+                      <Text style={{ opacity: 0.75, fontSize: 12 }}>
+                        RPI: temp {typeof rpi?.cpu_temp_c === "number" ? `${rpi.cpu_temp_c.toFixed(1)}°C` : "—"}
+                        {"  "}• undervoltage_now: {String(Boolean(rpi?.throttled_flags?.undervoltage_now))}
+                        {"  "}• throttling_now: {String(Boolean(rpi?.throttled_flags?.throttling_now))}
+                      </Text>
+                    ) : null}
+
+                    <Divider />
+
+                    <Text variant="titleSmall">ARDUINO</Text>
+
+                    {!ardOk ? (
+                      <Text style={{ opacity: 0.75, fontSize: 12 }}>Нет связи с Arduino</Text>
+                    ) : (
+                      <>
+                        <Text style={{ opacity: 0.85, fontSize: 12 }}>
+                          VCC: {typeof ard?.vcc_mv === "number" ? `${(ard.vcc_mv / 1000).toFixed(2)}V` : "—"}
+                          {"  "}• Free RAM: {typeof ard?.free_ram === "number" ? `${ard.free_ram} B` : "—"}
+                          {"  "}• Uptime: {typeof ard?.uptime_ms === "number" ? `${Math.round(ard.uptime_ms / 1000)}s` : "—"}
+                        </Text>
+
+                        <Text style={{ opacity: 0.75, fontSize: 12 }}>
+                          ServoPwr: {String(t?.servo_pwr ?? ard?.servo_pwr ?? "—")}
+                          {"  "}• ServoA: {ard?.servoA_deg ?? "—"}°
+                          {"  "}• ServoB: {ard?.servoB_deg ?? "—"}°
+                        </Text>
+
+                        <Text style={{ opacity: 0.75, fontSize: 12 }}>
+                          Motors: {ard?.motorA_cmd ?? "—"} / {ard?.motorB_cmd ?? "—"}
+                          {"  "}• Reset raw: {ard?.reset?.raw ?? "—"}
+                        </Text>
+                      </>
+                    )}
+
+                    <Divider />
+
+                    <Text variant="titleSmall">Расшифровка</Text>
+                    <Text selectable style={{ fontSize: 11, opacity: 0.7 }}>
+                      {(() => {
+                        const t = telemetry;
+                        const host = t?.host;
+                        const ardOk = t?.arduino?.ok;
+                        const ard = t?.arduino?.data;
+
+                        const plat = host?.platform;
+                        const upSec = host?.uptime?.seconds;
+
+                        const cpu = host?.cpu;
+                        const mem = host?.memory;
+                        const net = host?.network;
+
+                        const isRpi = Boolean(plat?.is_raspberry_pi);
+                        const rpi = host?.rpi;
+
+                        function fmtUptime(sec?: number) {
+                          if (typeof sec !== "number") return "—";
+                          const s = Math.max(0, sec);
+                          const d = Math.floor(s / 86400);
+                          const h = Math.floor((s % 86400) / 3600);
+                          const m = Math.floor((s % 3600) / 60);
+                          if (d > 0) return `${d}d ${h}h ${m}m`;
+                          if (h > 0) return `${h}h ${m}m`;
+                          return `${m}m`;
+                        }
+
+                        function fmtBytesAny(x: any) {
+                          const b = typeof x === "number" ? x : typeof x?.bytes === "number" ? x.bytes : null;
+                          if (b == null) return "—";
+
+                          const kb = 1024;
+                          const mb = kb * 1024;
+                          const gb = mb * 1024;
+
+                          if (b >= gb) return `${(b / gb).toFixed(2)} GB`;
+                          if (b >= mb) return `${(b / mb).toFixed(0)} MB`;
+                          if (b >= kb) return `${(b / kb).toFixed(0)} KB`;
+                          return `${b} B`;
+                        }
+
+                        const hostTitle = [
+                          plat?.hostname ? `Имя: ${plat.hostname}` : null,
+                          plat?.system ? `OS: ${plat.system} ${plat.release ?? ""}`.trim() : null,
+                          plat?.version ? `Build: ${plat.version}` : null,
+                          plat?.architecture ? `Arch: ${plat.architecture}` : null,
+                          plat?.machine ? `Machine: ${plat.machine}` : null,
+                          plat?.python ? `Python: ${plat.python}` : null,
+                        ].filter(Boolean);
+
+                        const cpuLine = [
+                          cpu?.physical_cores != null ? `Cores: ${cpu.physical_cores}P/${cpu.logical_cores ?? "?"}T` : null,
+                          typeof cpu?.percent_total === "number" ? `CPU: ${Math.round(cpu.percent_total)}%` : null,
+                          cpu?.freq_mhz?.current != null ? `Freq: ${Math.round(cpu.freq_mhz.current)} MHz` : null,
+                        ].filter(Boolean);
+
+                        const perCore =
+                          Array.isArray(cpu?.percent_per_core) && cpu.percent_per_core.length
+                            ? `Per-core: ${cpu.percent_per_core.map((x: number) => `${Math.round(x)}%`).join("  ")}`
+                            : null;
+
+                        const ramLine = mem?.ram
+                          ? `RAM: ${Math.round(mem.ram.percent ?? 0)}%  (${fmtBytesAny(mem.ram.used)} / ${fmtBytesAny(mem.ram.total)})`
+                          : "RAM: —";
+
+                        const swapLine = mem?.swap
+                          ? `SWAP: ${Math.round(mem.swap.percent ?? 0)}%  (${fmtBytesAny(mem.swap.used)} / ${fmtBytesAny(mem.swap.total)})`
+                          : "SWAP: —";
+
+                        const netIoLine = net?.io
+                          ? `NET IO: ↑ ${fmtBytesAny(net.io.bytes_sent)}   ↓ ${fmtBytesAny(net.io.bytes_recv)}`
+                          : "NET IO: —";
+
+                        const ipsObj = net?.ips && typeof net.ips === "object" ? (net.ips as any) : null;
+
+                        const vccMv = typeof ard?.vcc_mv === "number" ? ard.vcc_mv : null;
+                        const vccStr = vccMv != null ? `${(vccMv / 1000).toFixed(2)} V` : "—";
+                        const aUptime = typeof ard?.uptime_ms === "number" ? `${Math.round(ard.uptime_ms / 1000)} s` : "—";
+                        const aRam = typeof ard?.free_ram === "number" ? `${ard.free_ram} B` : "—";
+
+                        const reset = ard?.reset;
+                        const resetFlags =
+                          reset
+                            ? [
+                                reset.por ? "POR" : null,
+                                reset.ext ? "EXT" : null,
+                                reset.bor ? "BOR" : null,
+                                reset.wdt ? "WDT" : null,
+                              ].filter(Boolean).join(", ") || "none"
+                            : "—";
+
+                        return (
+                          <View style={{ gap: 10 }}>
+                            {/* HOST */}
+                            <Text variant="titleSmall">HOST</Text>
+
+                            {host?.ts_utc ? (
+                              <Text style={{ fontSize: 12, opacity: 0.75 }}>TS (UTC): {String(host.ts_utc)}</Text>
+                            ) : null}
+
+                            {hostTitle.map((line, i) => (
+                              <Text key={i} style={{ fontSize: 12, opacity: 0.85 }}>
+                                {line}
+                              </Text>
+                            ))}
+
+                            <Text style={{ fontSize: 12, opacity: 0.85 }}>
+                              Uptime: {fmtUptime(upSec)} ({typeof upSec === "number" ? `${upSec}s` : "—"})
+                            </Text>
+
+                            <Divider />
+
+                            {/* CPU */}
+                            <Text variant="titleSmall">CPU</Text>
+                            <Text style={{ fontSize: 12, opacity: 0.85 }}>{cpuLine.length ? cpuLine.join(" • ") : "—"}</Text>
+                            {perCore ? <Text style={{ fontSize: 12, opacity: 0.75 }}>{perCore}</Text> : null}
+
+                            <Divider />
+
+                            {/* MEMORY */}
+                            <Text variant="titleSmall">Память</Text>
+                            <Text style={{ fontSize: 12, opacity: 0.85 }}>{ramLine}</Text>
+                            <Text style={{ fontSize: 12, opacity: 0.75 }}>{swapLine}</Text>
+
+                            <Divider />
+
+                            {/* NETWORK */}
+                            <Text variant="titleSmall">Сеть</Text>
+                            <Text style={{ fontSize: 12, opacity: 0.85 }}>{netIoLine}</Text>
+
+                            {ipsObj ? (
+                              <View style={{ gap: 4, marginTop: 4 }}>
+                                {Object.entries(ipsObj).map(([iface, addrs]: any) => (
+                                  <Text key={iface} style={{ fontSize: 12, opacity: 0.75 }}>
+                                    • {iface}: {Array.isArray(addrs) ? addrs.join(", ") : "—"}
+                                  </Text>
+                                ))}
+                              </View>
+                            ) : (
+                              <Text style={{ fontSize: 12, opacity: 0.75 }}>IP: —</Text>
+                            )}
+
+                            <Divider />
+
+                            {/* RPI EXTRAS */}
+                            {isRpi ? (
+                              <>
+                                <Text variant="titleSmall">Raspberry Pi</Text>
+                                <Text style={{ fontSize: 12, opacity: 0.85 }}>
+                                  CPU temp: {typeof rpi?.cpu_temp_c === "number" ? `${rpi.cpu_temp_c.toFixed(1)}°C` : "—"}
+                                </Text>
+                                <Text style={{ fontSize: 12, opacity: 0.75 }}>
+                                  Undervoltage now: {String(Boolean(rpi?.throttled_flags?.undervoltage_now))} •
+                                  Throttling now: {String(Boolean(rpi?.throttled_flags?.throttling_now))}
+                                </Text>
+                                <Divider />
+                              </>
+                            ) : null}
+
+                            {/* ARDUINO */}
+                            <Text variant="titleSmall">ARDUINO</Text>
+
+                            {!ardOk ? (
+                              <Text style={{ fontSize: 12, opacity: 0.75 }}>Нет связи с Arduino</Text>
+                            ) : (
+                              <>
+                                <Text style={{ fontSize: 12, opacity: 0.85 }}>
+                                  VCC: {vccStr} • Free RAM: {aRam} • Uptime: {aUptime}
+                                </Text>
+
+                                <Text style={{ fontSize: 12, opacity: 0.75 }}>
+                                  ServoPwr: {String(t?.servo_pwr ?? ard?.servo_pwr ?? "—")} •
+                                  ServoA: {ard?.servoA_deg ?? "—"}° • ServoB: {ard?.servoB_deg ?? "—"}°
+                                </Text>
+
+                                <Text style={{ fontSize: 12, opacity: 0.75 }}>
+                                  Motors: {ard?.motorA_cmd ?? "—"} / {ard?.motorB_cmd ?? "—"} • Reset flags: {resetFlags}
+                                </Text>
+                              </>
+                            )}
+
+                            <Text style={{ fontSize: 11, opacity: 0.55, marginTop: 6 }}>
+                              Диск (disk) специально не показываем здесь, чтобы не грузить лишним.
+                            </Text>
+                          </View>
+                        );
+                      })()}
+                    </Text>
+                  </View>
+                );
+              })()}
+            </ScrollView>
+          </Dialog.Content>
+
+          <Dialog.Actions>
+            <Button onPress={refreshTelemetryNow}>Обновить</Button>
+            <Button mode="contained" onPress={() => setTelemetryOpen(false)}>
+              Закрыть
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
 
         <Snackbar visible={snack.open} onDismiss={() => setSnack({ open: false, text: "" })} duration={2500}>
           {snack.text}
+        </Snackbar>
+        <Snackbar
+          visible={alertSnack.open}
+          onDismiss={() => setAlertSnack({ open: false, text: "" })}
+          duration={3000}
+        >
+          {alertSnack.text}
         </Snackbar>
       </Portal>
     </View>
