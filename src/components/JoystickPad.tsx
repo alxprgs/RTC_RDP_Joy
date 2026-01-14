@@ -42,18 +42,14 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-/** Делает rgba из цвета темы (#hex или rgb/rgba). Если цвет странный — фолбэк в белый/чёрный. */
 function rgbaFromTheme(color: string | undefined, alpha: number, fallbackDark = true) {
   const c = (color || "").trim();
 
-  // hex
   if (c.startsWith("#")) return hexToRgba(c, alpha);
 
-  // rgb/rgba
   const m = c.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
   if (m) return `rgba(${m[1]},${m[2]},${m[3]},${alpha})`;
 
-  // fallback
   return fallbackDark ? `rgba(255,255,255,${alpha})` : `rgba(0,0,0,${alpha})`;
 }
 
@@ -92,13 +88,11 @@ export default function JoystickPad({
     const outX = inDeadzone ? 0 : round(rawX * clamp(scale, 0, 1));
     const outY = inDeadzone ? 0 : round(rawY * clamp(scale, 0, 1));
 
-    // минус — чтобы крутилось “как ожидается” в RN
     const angleDeg = (-Math.atan2(ny, nx) * 180) / Math.PI;
 
     return { nx, ny, mag, rawX, rawY, outX, outY, dzFrac, inDeadzone, angleDeg };
   }, [pos.x, pos.y, radius, deadzone, scale]);
 
-  // ---- Цвета под светлую/тёмную тему ----
   const onSurface = (theme as any)?.colors?.onSurface as string | undefined;
   const surface = ((theme as any)?.colors?.surface as string | undefined) ?? "#ffffff";
   const surfaceVariant = (theme as any)?.colors?.surfaceVariant as string | undefined;
@@ -120,7 +114,6 @@ export default function JoystickPad({
 
   const centerDot = rgbaFromTheme(onSurface, isDark ? 0.20 : 0.28, isDark);
 
-  // ---- Пан ----
   const pan = useMemo(
     () =>
       PanResponder.create({
@@ -167,7 +160,6 @@ export default function JoystickPad({
     [onChange, radius]
   );
 
-  // ---- Геометрия ----
   const inner = size - 28;
   const innerR = inner / 2;
   const dzR = radius * derived.dzFrac;
@@ -181,7 +173,6 @@ export default function JoystickPad({
   const arrowHead = 10;
   const showDir = active && !derived.inDeadzone && derived.mag > 0.02;
 
-  // ---- Подсветка стрелок (может быть несколько сразу) ----
   const thr = 0.25;
   const upOn = showDir && derived.ny > thr;
   const downOn = showDir && derived.ny < -thr;
@@ -191,7 +182,6 @@ export default function JoystickPad({
   const onOp = 1.0;
   const offOp = 0.35;
 
-  // ---- Knob ----
   const primary = (theme as any)?.colors?.primary ?? "#4da3ff";
   const kFill =
     knobColor ??

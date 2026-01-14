@@ -6,7 +6,7 @@ type JoyPayload = { x: number; y: number; deadzone: number; scale: number };
 
 type Opts = {
   baseUrl: string;
-  path?: string; // default "/ws/joystick"
+  path?: string;
   onStatus?: (s: WsStatus) => void;
   onErrorText?: (text: string) => void;
 };
@@ -58,7 +58,6 @@ export class JoystickWsClient {
         this.ws.onclose = null as any;
         this.ws.close();
       } catch {
-        // ignore
       }
     }
     this.ws = null;
@@ -79,8 +78,6 @@ export class JoystickWsClient {
     }
   }
 
-  // --------------------
-
   private setStatus(s: WsStatus) {
     if (this.status === s) return;
     this.status = s;
@@ -100,7 +97,7 @@ export class JoystickWsClient {
 
     this.attempt += 1;
     const pow = Math.min(this.attempt, 6);
-    const delay = Math.min(5000, 300 * Math.pow(2, pow)); // 300ms..~5s
+    const delay = Math.min(5000, 300 * Math.pow(2, pow));
 
     this.reconnectTimer = setTimeout(() => {
       this.open("reconnecting");
@@ -110,7 +107,6 @@ export class JoystickWsClient {
   private open(kind: "connecting" | "reconnecting") {
     if (!this.wantOpen) return;
 
-    // позволяем "переподключиться", если ws умер
     if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) {
       return;
     }
@@ -136,7 +132,6 @@ export class JoystickWsClient {
     };
 
     w.onerror = () => {
-      // в RN error не всегда информативен
       this.onErrorText?.("WS error");
     };
 
@@ -152,12 +147,10 @@ export class JoystickWsClient {
 
       if (!msg || typeof msg !== "object") return;
 
-      // app-level ping/pong от сервера
       if (msg.type === "ping") {
         try {
           w.send(JSON.stringify({ type: "pong", t: Date.now() }));
         } catch {
-          // ignore
         }
         return;
       }

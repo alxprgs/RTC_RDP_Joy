@@ -25,12 +25,13 @@ export default function HostScreen({ initialValue, onConnected }: Props) {
       return;
     }
     setChecking(true);
+    setStatus({ ok: false, text: "Проверяю подключение…" });
     try {
       const r = await apiHealth(url);
       if (r?.ok) {
         setStatus({ ok: true, text: `OK: ${String(r.arduino ?? "arduino")}` });
       } else {
-        setStatus({ ok: false, text: `Нет: ${String(r?.error ?? "unknown")}` });
+        setStatus({ ok: false, text: `Сервер ответил, но health не OK: ${String(r?.error ?? "unknown")}` });
       }
     } catch (e: any) {
       setStatus({ ok: false, text: e?.message ? String(e.message) : "Ошибка" });
@@ -59,14 +60,14 @@ export default function HostScreen({ initialValue, onConnected }: Props) {
         flex: 1,
         padding: 16,
         justifyContent: "center",
-        backgroundColor: theme.colors.background, // ✅ вот оно
+        backgroundColor: theme.colors.background,
       }}
     >
       <Card
         style={{
           borderRadius: 18,
           overflow: "hidden",
-          backgroundColor: theme.colors.surface, // чтобы карточка красиво менялась
+          backgroundColor: theme.colors.surface,
         }}
       >
         <Card.Content style={{ gap: 12 }}>
@@ -94,7 +95,7 @@ export default function HostScreen({ initialValue, onConnected }: Props) {
             {status?.text ?? ""}
           </HelperText>
 
-          <View style={{ flexDirection: "row", gap: 10 }}>
+          <View style={{ flexDirection: "row", gap: 10 }}>  
             <Button
               mode="outlined"
               onPress={() => checkNow(baseUrl)}

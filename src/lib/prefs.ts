@@ -19,6 +19,5 @@ export async function saveTransportMode(baseUrl: string, mode: TransportMode) {
   try {
     await AsyncStorage.setItem(key(baseUrl), mode);
   } catch {
-    // ignore
   }
 }

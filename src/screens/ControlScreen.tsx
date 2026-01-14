@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Easing, FlatList, View } from "react-native";
+import Slider from "@react-native-community/slider";
 import {
   Appbar,
   Button,
@@ -18,7 +19,17 @@ import {
 
 import { useThemeMode } from "../app/themeContext";
 import JoystickPad from "../components/JoystickPad";
-import { apiJoystick, apiListActions, apiRunAction, apiStop, apiHealth } from "../lib/api";
+import {
+  apiJoystick,
+  apiListActions,
+  apiRunAction,
+  apiStop,
+  apiHealth,
+  apiServoA,
+  apiServoB,
+  apiServoAll,
+  apiServoCenter,
+} from "../lib/api";
 import { loadButtons, saveButtons } from "../lib/storage";
 import type { CustomButton, ServerAction } from "../types/buttons";
 
@@ -47,28 +58,88 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   const [loadingActions, setLoadingActions] = useState(false);
 
   const [deadzone, setDeadzone] = useState(20);
-  const [scale, setScale] = useState(1.0);
+
+  const [scalePct, setScalePct] = useState(100);
+
+  const scale = useMemo(() => clamp(scalePct, 1, 100) / 100, [scalePct]);
 
   const [snack, setSnack] = useState<{ open: boolean; text: string }>({ open: false, text: "" });
   const [healthText, setHealthText] = useState<string>("");
 
-  // ---- Transport mode (HTTP/WS) ----
   const [transportMode, setTransportMode] = useState<TransportMode>("http");
   const [wsStatus, setWsStatus] = useState<WsStatus>("disconnected");
   const [wsErrText, setWsErrText] = useState<string>("");
 
   const wsRef = useRef<JoystickWsClient | null>(null);
 
-  // ===== Heart animation state =====
   const [healthChecking, setHealthChecking] = useState(false);
   const heartScale = useRef(new Animated.Value(1)).current;
-  const heartRot = useRef(new Animated.Value(0)).current; // degrees
-  const heartShake = useRef(new Animated.Value(0)).current; // px
+  const heartRot = useRef(new Animated.Value(0)).current;
+  const heartShake = useRef(new Animated.Value(0)).current;
 
   const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
+    const [servoA, setServoA] = useState(90);
+  const [servoB, setServoB] = useState(90);
+
+  const [servoAText, setServoAText] = useState("90");
+  const [servoBText, setServoBText] = useState("90");
+
+  const servoInFlightRef = useRef(false);
+
+  function digitsOnly(t: string) {
+    return (t ?? "").replace(/[^\d]/g, "");
+  }
+
+  async function sendServo(which: "a" | "b" | "all", deg: number) {
+    if (!baseUrl) return;
+    if (servoInFlightRef.current) return;
+
+    const v = clamp(Math.round(deg), 0, 180);
+
+    servoInFlightRef.current = true;
+    try {
+      if (which === "a") await apiServoA(baseUrl, v);
+      if (which === "b") await apiServoB(baseUrl, v);
+      if (which === "all") await apiServoAll(baseUrl, v);
+    } catch (e: any) {
+      setSnack({ open: true, text: e?.message ? String(e.message) : "Servo error" });
+    } finally {
+      servoInFlightRef.current = false;
+    }
+  }
+
+  async function centerServos() {
+    try {
+      setServoA(90);
+      setServoB(90);
+      setServoAText("90");
+      setServoBText("90");
+      await apiServoCenter(baseUrl);
+    } catch (e: any) {
+      setSnack({ open: true, text: e?.message ? String(e.message) : "Servo center error" });
+    }
+  }
+
+  function applyServoAFromText() {
+    const cleaned = digitsOnly(servoAText);
+    const v = clamp(parseInt(cleaned || "0", 10) || 0, 0, 180);
+    setServoA(v);
+    setServoAText(String(v));
+    sendServo("a", v);
+  }
+
+  function applyServoBFromText() {
+    const cleaned = digitsOnly(servoBText);
+    const v = clamp(parseInt(cleaned || "0", 10) || 0, 0, 180);
+    setServoB(v);
+    setServoBText(String(v));
+    sendServo("b", v);
+  }
+
+  
+
   function startHeartLoop() {
-    // лёгкий “дыхательный” пульс
     pulseLoopRef.current?.stop();
 
     heartScale.setValue(1);
@@ -128,7 +199,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   }
 
   function playOkTick() {
-    // два быстрых “удара”
     Animated.sequence([
       Animated.timing(heartScale, { toValue: 1.22, duration: 120, useNativeDriver: true }),
       Animated.timing(heartScale, { toValue: 1.0, duration: 120, useNativeDriver: true }),
@@ -148,7 +218,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     ]).start();
   }
 
-  // load mode per baseUrl
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -160,15 +229,12 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     };
   }, [baseUrl]);
 
-  // persist mode
   useEffect(() => {
     if (!baseUrl) return;
     saveTransportMode(baseUrl, transportMode);
   }, [baseUrl, transportMode]);
 
-  // manage WS client lifecycle
   useEffect(() => {
-    // cleanup old
     wsRef.current?.close();
     wsRef.current = null;
     setWsErrText("");
@@ -210,7 +276,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
   async function refreshHealth() {
     if (!baseUrl) return;
 
-    // если уже проверяем — игнор
     if (healthChecking) return;
 
     setHealthChecking(true);
@@ -238,7 +303,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
 
   useEffect(() => {
     refreshHealth();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
   async function persist(next: CustomButton[]) {
@@ -246,7 +310,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     await saveButtons(baseUrl, next);
   }
 
-  // ---- Joystick sending (HTTP polling / WS push) ----
   const joyPendingRef = useRef({ x: 0, y: 0, active: false });
   const joyLastSentRef = useRef({ x: 0, y: 0, active: false });
   const joyInFlightRef = useRef(false);
@@ -261,7 +324,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
       const changed = p.x !== l.x || p.y !== l.y || p.active !== l.active;
       if (!changed) return;
 
-      // HTTP
       if (transportMode === "http") {
         if (joyInFlightRef.current) return;
 
@@ -277,7 +339,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
         return;
       }
 
-      // WS
       const ws = wsRef.current;
       if (!ws) return;
 
@@ -381,8 +442,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
         : wsStatus === "reconnecting"
           ? "WS: reconnecting…"
           : "WS: disconnected";
-
-  // animated styles for the heart icon wrapper
   const heartRotate = heartRot.interpolate({
     inputRange: [-10, 10],
     outputRange: ["-10deg", "10deg"],
@@ -394,8 +453,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
         <Appbar.Content title="Motor Control" subtitle={baseUrl} />
 
         <Appbar.Action icon={mode === "dark" ? "weather-sunny" : "weather-night"} onPress={toggle} />
-
-        {/* Heart with animation wrapper */}
         <Animated.View
           style={{
             transform: [{ translateX: heartShake }, { scale: heartScale }, { rotate: heartRotate }],
@@ -425,8 +482,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                 </View>
 
                 <Divider />
-
-                {/* Transport toggle */}
                 <View style={{ gap: 8 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                     <Text style={{ opacity: 0.8 }}>Транспорт джойстика</Text>
@@ -469,13 +524,18 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                     style={{ flex: 1 }}
                   />
                   <TextInput
-                    label="Scale (0..1)"
-                    value={String(scale)}
+                    label="Мощность (1..100)"
+                    value={String(scalePct)}
                     onChangeText={(t) => {
-                      const v = parseFloat(t.replace(",", "."));
-                      if (Number.isFinite(v)) setScale(clamp(v, 0, 1));
+                      const cleaned = (t ?? "").replace(/[^\d]/g, "");
+                      if (cleaned === "") {
+                        setScalePct(100);
+                        return;
+                      }
+                      const v = parseInt(cleaned, 10);
+                      if (Number.isFinite(v)) setScalePct(clamp(v, 1, 100));
                     }}
-                    keyboardType="decimal-pad"
+                    keyboardType="number-pad"
                     style={{ flex: 1 }}
                   />
                 </View>
@@ -499,7 +559,147 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                 </View>
               </Card.Content>
             </Card>
+            <Card style={{ borderRadius: 18 }}>
+              <Card.Content style={{ gap: 12 }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Text variant="titleMedium" style={{ flexShrink: 0 }}>
+                  Сервоприводы
+                </Text>
 
+                <View
+                  style={{
+                    flexDirection: "row",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    justifyContent: "flex-start",
+                    flex: 1,
+                    minWidth: 180,
+                  }}
+                >
+                  <Button
+                    mode="outlined"
+                    compact
+                    onPress={() => {
+                      setServoB(servoA);
+                      setServoBText(String(servoA));
+                      sendServo("b", servoA);
+                    }}
+                  >
+                    B = A
+                  </Button>
+
+                  <Button
+                    mode="outlined"
+                    compact
+                    onPress={() => {
+                      setServoA(servoB);
+                      setServoAText(String(servoB));
+                      sendServo("a", servoB);
+                    }}
+                  >
+                    A = B
+                  </Button>
+
+                  <Button mode="outlined" compact onPress={centerServos}>
+                    Центр
+                  </Button>
+                </View>
+              </View>
+
+                <Divider />
+
+                {/* 2 сервы в ряд */}
+                <View style={{ flexDirection: "row", gap: 12 }}>
+                  {/* SERVO A */}
+                  <Card mode="outlined" style={{ flex: 1, borderRadius: 16 }}>
+                    <Card.Content style={{ gap: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <Text variant="titleSmall">Servo A</Text>
+                        <Text style={{ opacity: 0.7 }}>{servoA}°</Text>
+                      </View>
+
+                      <Slider
+                        style={{ width: "100%", height: 36 }}
+                        minimumValue={0}
+                        maximumValue={180}
+                        step={1}
+                        value={servoA}
+                        onValueChange={(v) => {
+                          const nv = Math.round(v);
+                          setServoA(nv);
+                          setServoAText(String(nv));
+                        }}
+                        onSlidingComplete={(v) => sendServo("a", Math.round(v))}
+                        minimumTrackTintColor={theme.colors.primary}
+                        maximumTrackTintColor={theme.colors.outline}
+                        thumbTintColor={theme.colors.primary}
+                      />
+
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <TextInput
+                          label="deg"
+                          value={servoAText}
+                          onChangeText={(t) => setServoAText(digitsOnly(t))}
+                          keyboardType="number-pad"
+                          style={{ flex: 1 }}
+                          onBlur={applyServoAFromText}
+                          onSubmitEditing={applyServoAFromText}
+                        />
+                        <IconButton icon="check" onPress={applyServoAFromText} />
+                      </View>
+                    </Card.Content>
+                  </Card>
+
+                  {/* SERVO B */}
+                  <Card mode="outlined" style={{ flex: 1, borderRadius: 16 }}>
+                    <Card.Content style={{ gap: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <Text variant="titleSmall">Servo B</Text>
+                        <Text style={{ opacity: 0.7 }}>{servoB}°</Text>
+                      </View>
+
+                      <Slider
+                        style={{ width: "100%", height: 36 }}
+                        minimumValue={0}
+                        maximumValue={180}
+                        step={1}
+                        value={servoB}
+                        onValueChange={(v) => {
+                          const nv = Math.round(v);
+                          setServoB(nv);
+                          setServoBText(String(nv));
+                        }}
+                        onSlidingComplete={(v) => sendServo("b", Math.round(v))}
+                        minimumTrackTintColor={theme.colors.primary}
+                        maximumTrackTintColor={theme.colors.outline}
+                        thumbTintColor={theme.colors.primary}
+                      />
+
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <TextInput
+                          label="deg"
+                          value={servoBText}
+                          onChangeText={(t) => setServoBText(digitsOnly(t))}
+                          keyboardType="number-pad"
+                          style={{ flex: 1 }}
+                          onBlur={applyServoBFromText}
+                          onSubmitEditing={applyServoBFromText}
+                        />
+                        <IconButton icon="check" onPress={applyServoBFromText} />
+                      </View>
+                    </Card.Content>
+                  </Card>
+                </View>
+              </Card.Content>
+            </Card>
             <Card style={{ borderRadius: 18 }}>
               <Card.Content style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
