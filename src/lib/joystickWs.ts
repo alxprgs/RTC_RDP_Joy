@@ -1,6 +1,6 @@
-import { baseUrlToWsUrl } from "./api";
+import { apiJoystick, baseUrlToWsUrl } from "./api";
 
-export type WsStatus = "disconnected" | "connecting" | "connected" | "reconnecting";
+export type WsStatus = "disconnected" | "connecting" | "connected" | "reconnecting" | "dev-mode-http";
 
 type JoyPayload = { x: number; y: number; deadzone: number; scale: number };
 
@@ -20,9 +20,12 @@ export class JoystickWsClient {
   private status: WsStatus = "disconnected";
   private attempt = 0;
   private reconnectTimer: any = null;
+  private devModeHttp = false;
 
   private onStatus?: (s: WsStatus) => void;
   private onErrorText?: (text: string) => void;
+
+  private httpThrottle: any = null;
 
   constructor(opts: Opts) {
     this.baseUrl = opts.baseUrl;
@@ -48,7 +51,9 @@ export class JoystickWsClient {
 
   close() {
     this.wantOpen = false;
+    this.devModeHttp = false;
     this.clearReconnect();
+    this.clearHttpThrottle();
 
     if (this.ws) {
       try {
@@ -66,6 +71,11 @@ export class JoystickWsClient {
   }
 
   sendJoystick(payload: JoyPayload): boolean {
+    if (this.devModeHttp) {
+      this.sendViaHttp(payload);
+      return true;
+    }
+
     const w = this.ws;
     if (!w || w.readyState !== 1) return false;
 
@@ -75,6 +85,24 @@ export class JoystickWsClient {
     } catch (e: any) {
       this.onErrorText?.(e?.message ? String(e.message) : "WS send error");
       return false;
+    }
+  }
+
+  private sendViaHttp(payload: JoyPayload) {
+    if (this.httpThrottle) return;
+
+    this.httpThrottle = setTimeout(() => {
+      this.httpThrottle = null;
+    }, 50);
+
+    apiJoystick(this.baseUrl, payload).catch((e) => {
+    });
+  }
+
+  private clearHttpThrottle() {
+    if (this.httpThrottle) {
+      clearTimeout(this.httpThrottle);
+      this.httpThrottle = null;
     }
   }
 
@@ -118,9 +146,12 @@ export class JoystickWsClient {
     try {
       w = new WebSocket(url);
     } catch (e: any) {
-      this.onErrorText?.(e?.message ? String(e.message) : "WS create failed");
-      this.setStatus("disconnected");
-      this.scheduleReconnect();
+      const errMsg = String(e?.message ?? "");
+      if (this.attempt < 2) {
+        this.onErrorText?.(`WS недоступен, используется HTTP режим: ${errMsg}`);
+      }
+      this.devModeHttp = true;
+      this.setStatus("dev-mode-http");
       return;
     }
 
@@ -128,11 +159,19 @@ export class JoystickWsClient {
 
     w.onopen = () => {
       this.attempt = 0;
+      this.devModeHttp = false;
       this.setStatus("connected");
     };
 
     w.onerror = () => {
-      this.onErrorText?.("WS error");
+      if (this.attempt < 2) {
+        this.onErrorText?.("WS error, переключение на HTTP режим");
+      }
+      // После нескольких неудачных попыток переключаемся на HTTP
+      if (this.attempt >= 3) {
+        this.devModeHttp = true;
+        this.setStatus("dev-mode-http");
+      }
     };
 
     w.onmessage = (ev) => {
@@ -166,6 +205,11 @@ export class JoystickWsClient {
       this.ws = null;
       if (!this.wantOpen) {
         this.setStatus("disconnected");
+        return;
+      }
+      if (this.attempt >= 3) {
+        this.devModeHttp = true;
+        this.setStatus("dev-mode-http");
         return;
       }
       this.setStatus("reconnecting");

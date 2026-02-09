@@ -25,12 +25,11 @@ import {
   apiRunAction,
   apiStop,
   apiHealth,
-  apiServoA,
-  apiServoB,
-  apiServoAll,
+  apiServo,
   apiServoCenter,
   apiTelemetry,
   baseUrlToWsUrl,
+  apiServoBatch,
 } from "../lib/api";
 import { loadButtons, saveButtons } from "../lib/storage";
 import type { CustomButton, ServerAction } from "../types/buttons";
@@ -81,12 +80,14 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
 
   const pulseLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  const [servoA, setServoA] = useState(90);
-  const [servoB, setServoB] = useState(90);
+  const [servo1, setServo1] = useState(90);
+  const [servo2, setServo2] = useState(90);
+  const [servo3, setServo3] = useState(90);
 
-  const [servoAText, setServoAText] = useState("90");
-  const [servoBText, setServoBText] = useState("90");
-
+  const [servo1Text, setServo1Text] = useState("90");
+  const [servo2Text, setServo2Text] = useState("90");
+  const [servo3Text, setServo3Text] = useState("90");
+  
   const [telemetry, setTelemetry] = useState<any | null>(null);
   const [telemetryErr, setTelemetryErr] = useState<string>("");
   const [telemetryTs, setTelemetryTs] = useState<number>(0);
@@ -310,7 +311,7 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     return (t ?? "").replace(/[^\d]/g, "");
   }
 
-  async function sendServo(which: "a" | "b" | "all", deg: number) {
+  async function sendServo(servoId: number, deg: number) {
     if (!baseUrl) return;
     if (servoInFlightRef.current) return;
 
@@ -318,9 +319,7 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
 
     servoInFlightRef.current = true;
     try {
-      if (which === "a") await apiServoA(baseUrl, v);
-      if (which === "b") await apiServoB(baseUrl, v);
-      if (which === "all") await apiServoAll(baseUrl, v);
+      await apiServo(baseUrl, servoId, v);
     } catch (e: any) {
       setSnack({ open: true, text: e?.message ? String(e.message) : "Servo error" });
     } finally {
@@ -328,32 +327,44 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     }
   }
 
+  // Замени функцию centerServos:
   async function centerServos() {
     try {
-      setServoA(90);
-      setServoB(90);
-      setServoAText("90");
-      setServoBText("90");
+      setServo1(90);
+      setServo2(90);
+      setServo3(90);
+      setServo1Text("90");
+      setServo2Text("90");
+      setServo3Text("90");
       await apiServoCenter(baseUrl);
     } catch (e: any) {
       setSnack({ open: true, text: e?.message ? String(e.message) : "Servo center error" });
     }
   }
 
-  function applyServoAFromText() {
-    const cleaned = digitsOnly(servoAText);
+  // Замени функции apply:
+  function applyServo1FromText() {
+    const cleaned = digitsOnly(servo1Text);
     const v = clamp(parseInt(cleaned || "0", 10) || 0, 0, 180);
-    setServoA(v);
-    setServoAText(String(v));
-    sendServo("a", v);
+    setServo1(v);
+    setServo1Text(String(v));
+    sendServo(1, v);
   }
 
-  function applyServoBFromText() {
-    const cleaned = digitsOnly(servoBText);
+  function applyServo2FromText() {
+    const cleaned = digitsOnly(servo2Text);
     const v = clamp(parseInt(cleaned || "0", 10) || 0, 0, 180);
-    setServoB(v);
-    setServoBText(String(v));
-    sendServo("b", v);
+    setServo2(v);
+    setServo2Text(String(v));
+    sendServo(2, v);
+  }
+
+  function applyServo3FromText() {
+    const cleaned = digitsOnly(servo3Text);
+    const v = clamp(parseInt(cleaned || "0", 10) || 0, 0, 180);
+    setServo3(v);
+    setServo3Text(String(v));
+    sendServo(3, v);
   }
 
   
@@ -780,69 +791,68 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
             </Card>
             <Card style={{ borderRadius: 18 }}>
               <Card.Content style={{ gap: 12 }}>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  flexWrap: "wrap",
-                }}
-              >
-                <Text variant="titleMedium" style={{ flexShrink: 0 }}>
-                  Сервоприводы
-                </Text>
-
                 <View
                   style={{
                     flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
                     flexWrap: "wrap",
-                    gap: 8,
-                    justifyContent: "flex-start",
-                    flex: 1,
-                    minWidth: 180,
                   }}
                 >
-                  <Button
-                    mode="outlined"
-                    compact
-                    onPress={() => {
-                      setServoB(servoA);
-                      setServoBText(String(servoA));
-                      sendServo("b", servoA);
+                  <Text variant="titleMedium" style={{ flexShrink: 0 }}>
+                    Сервоприводы (3 шт)
+                  </Text>
+
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      justifyContent: "flex-start",
+                      flex: 1,
+                      minWidth: 180,
                     }}
                   >
-                    B = A
-                  </Button>
+                    <Button
+                      mode="outlined"
+                      compact
+                      onPress={async () => {
+                        const items = [
+                          { id: 1, deg: servo1 },
+                          { id: 2, deg: servo1 },
+                          { id: 3, deg: servo1 },
+                        ];
+                        setServo2(servo1);
+                        setServo3(servo1);
+                        setServo2Text(String(servo1));
+                        setServo3Text(String(servo1));
+                        try {
+                          await apiServoBatch(baseUrl, items);
+                        } catch (e: any) {
+                          setSnack({ open: true, text: e?.message ? String(e.message) : "Batch error" });
+                        }
+                      }}
+                    >
+                      Все = S1
+                    </Button>
 
-                  <Button
-                    mode="outlined"
-                    compact
-                    onPress={() => {
-                      setServoA(servoB);
-                      setServoAText(String(servoB));
-                      sendServo("a", servoB);
-                    }}
-                  >
-                    A = B
-                  </Button>
-
-                  <Button mode="outlined" compact onPress={centerServos}>
-                    Центр
-                  </Button>
+                    <Button mode="outlined" compact onPress={centerServos}>
+                      Центр
+                    </Button>
+                  </View>
                 </View>
-              </View>
 
                 <Divider />
 
-                {/* 2 сервы в ряд */}
-                <View style={{ flexDirection: "row", gap: 12 }}>
-                  {/* SERVO A */}
-                  <Card mode="outlined" style={{ flex: 1, borderRadius: 16 }}>
+                {/* 3 сервы в ряд */}
+                <View style={{ flexDirection: "row", gap: 12, flexWrap: "wrap" }}>
+                  {/* SERVO 1 */}
+                  <Card mode="outlined" style={{ flex: 1, minWidth: 140, borderRadius: 16 }}>
                     <Card.Content style={{ gap: 8 }}>
                       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                        <Text variant="titleSmall">Servo A</Text>
-                        <Text style={{ opacity: 0.7 }}>{servoA}°</Text>
+                        <Text variant="titleSmall">Servo 1</Text>
+                        <Text style={{ opacity: 0.7 }}>{servo1}°</Text>
                       </View>
 
                       <Slider
@@ -850,13 +860,13 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                         minimumValue={0}
                         maximumValue={180}
                         step={1}
-                        value={servoA}
+                        value={servo1}
                         onValueChange={(v) => {
                           const nv = Math.round(v);
-                          setServoA(nv);
-                          setServoAText(String(nv));
+                          setServo1(nv);
+                          setServo1Text(String(nv));
                         }}
-                        onSlidingComplete={(v) => sendServo("a", Math.round(v))}
+                        onSlidingComplete={(v) => sendServo(1, Math.round(v))}
                         minimumTrackTintColor={theme.colors.primary}
                         maximumTrackTintColor={theme.colors.outline}
                         thumbTintColor={theme.colors.primary}
@@ -865,24 +875,24 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                         <TextInput
                           label="deg"
-                          value={servoAText}
-                          onChangeText={(t) => setServoAText(digitsOnly(t))}
+                          value={servo1Text}
+                          onChangeText={(t) => setServo1Text(digitsOnly(t))}
                           keyboardType="number-pad"
                           style={{ flex: 1 }}
-                          onBlur={applyServoAFromText}
-                          onSubmitEditing={applyServoAFromText}
+                          onBlur={applyServo1FromText}
+                          onSubmitEditing={applyServo1FromText}
                         />
-                        <IconButton icon="check" onPress={applyServoAFromText} />
+                        <IconButton icon="check" onPress={applyServo1FromText} />
                       </View>
                     </Card.Content>
                   </Card>
 
-                  {/* SERVO B */}
-                  <Card mode="outlined" style={{ flex: 1, borderRadius: 16 }}>
+                  {/* SERVO 2 */}
+                  <Card mode="outlined" style={{ flex: 1, minWidth: 140, borderRadius: 16 }}>
                     <Card.Content style={{ gap: 8 }}>
                       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                        <Text variant="titleSmall">Servo B</Text>
-                        <Text style={{ opacity: 0.7 }}>{servoB}°</Text>
+                        <Text variant="titleSmall">Servo 2</Text>
+                        <Text style={{ opacity: 0.7 }}>{servo2}°</Text>
                       </View>
 
                       <Slider
@@ -890,13 +900,13 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                         minimumValue={0}
                         maximumValue={180}
                         step={1}
-                        value={servoB}
+                        value={servo2}
                         onValueChange={(v) => {
                           const nv = Math.round(v);
-                          setServoB(nv);
-                          setServoBText(String(nv));
+                          setServo2(nv);
+                          setServo2Text(String(nv));
                         }}
-                        onSlidingComplete={(v) => sendServo("b", Math.round(v))}
+                        onSlidingComplete={(v) => sendServo(2, Math.round(v))}
                         minimumTrackTintColor={theme.colors.primary}
                         maximumTrackTintColor={theme.colors.outline}
                         thumbTintColor={theme.colors.primary}
@@ -905,14 +915,54 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                         <TextInput
                           label="deg"
-                          value={servoBText}
-                          onChangeText={(t) => setServoBText(digitsOnly(t))}
+                          value={servo2Text}
+                          onChangeText={(t) => setServo2Text(digitsOnly(t))}
                           keyboardType="number-pad"
                           style={{ flex: 1 }}
-                          onBlur={applyServoBFromText}
-                          onSubmitEditing={applyServoBFromText}
+                          onBlur={applyServo2FromText}
+                          onSubmitEditing={applyServo2FromText}
                         />
-                        <IconButton icon="check" onPress={applyServoBFromText} />
+                        <IconButton icon="check" onPress={applyServo2FromText} />
+                      </View>
+                    </Card.Content>
+                  </Card>
+
+                  {/* SERVO 3 */}
+                  <Card mode="outlined" style={{ flex: 1, minWidth: 140, borderRadius: 16 }}>
+                    <Card.Content style={{ gap: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <Text variant="titleSmall">Servo 3</Text>
+                        <Text style={{ opacity: 0.7 }}>{servo3}°</Text>
+                      </View>
+
+                      <Slider
+                        style={{ width: "100%", height: 36 }}
+                        minimumValue={0}
+                        maximumValue={180}
+                        step={1}
+                        value={servo3}
+                        onValueChange={(v) => {
+                          const nv = Math.round(v);
+                          setServo3(nv);
+                          setServo3Text(String(nv));
+                        }}
+                        onSlidingComplete={(v) => sendServo(3, Math.round(v))}
+                        minimumTrackTintColor={theme.colors.primary}
+                        maximumTrackTintColor={theme.colors.outline}
+                        thumbTintColor={theme.colors.primary}
+                      />
+
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <TextInput
+                          label="deg"
+                          value={servo3Text}
+                          onChangeText={(t) => setServo3Text(digitsOnly(t))}
+                          keyboardType="number-pad"
+                          style={{ flex: 1 }}
+                          onBlur={applyServo3FromText}
+                          onSubmitEditing={applyServo3FromText}
+                        />
+                        <IconButton icon="check" onPress={applyServo3FromText} />
                       </View>
                     </Card.Content>
                   </Card>

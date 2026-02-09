@@ -181,3 +181,18 @@ export async function apiTelemetry(baseUrl: string) {
     2500
   );
 }
+
+export async function apiServo(baseUrl: string, servoId: number, deg: number) {
+  const v = Math.max(0, Math.min(180, Math.round(deg)));
+  return fetchJson(`${baseUrl}/servo/${servoId}`, { 
+    method: "POST", 
+    body: JSON.stringify({ deg: v }) 
+  }, 2500);
+}
+
+export async function apiServoBatch(baseUrl: string, items: Array<{ id: number; deg: number }>) {
+  return fetchJson(`${baseUrl}/servo/batch`, { 
+    method: "POST", 
+    body: JSON.stringify({ items }) 
+  }, 2500);
+}
