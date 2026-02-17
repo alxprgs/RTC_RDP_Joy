@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Easing, FlatList, View, ScrollView } from "react-native";
 import Slider from "@react-native-community/slider";
 import {
@@ -106,10 +106,17 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
 
   const [telemetryOpen, setTelemetryOpen] = useState(false);
 
+  const joyPendingRef = useRef({ x: 0, y: 0, active: false });
+  const joyLastSentRef = useRef({ x: 0, y: 0, active: false });
+  const joyInFlightRef = useRef(false);
+
   const [alertSnack, setAlertSnack] = useState<{ open: boolean; text: string }>({
     open: false,
     text: "",
   });
+  const handleJoystickChange = useCallback((x: number, y: number, active: boolean) => {
+    joyPendingRef.current = { x, y, active };
+  }, []);
 
   const lastAlertRef = useRef({
     undervoltageNow: false,
@@ -540,10 +547,6 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
     await saveButtons(baseUrl, next);
   }
 
-  const joyPendingRef = useRef({ x: 0, y: 0, active: false });
-  const joyLastSentRef = useRef({ x: 0, y: 0, active: false });
-  const joyInFlightRef = useRef(false);
-
   useEffect(() => {
     const tickMs = transportMode === "ws" ? 33 : 50;
 
@@ -778,9 +781,7 @@ export default function ControlScreen({ baseUrl, onChangeHost }: Props) {
                   deadzone={deadzone}
                   scale={scale}
                   showValues
-                  onChange={(x, y, active) => {
-                    joyPendingRef.current = { x, y, active };
-                  }}
+                  onChange={handleJoystickChange}
                 />
                 <View style={{ flexDirection: "row", gap: 10, width: "100%" }}>
                   <Button mode="contained" onPress={stop} style={{ flex: 1 }}>
